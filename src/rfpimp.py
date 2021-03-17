@@ -13,8 +13,17 @@ import matplotlib.pyplot as plt
 import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble.forest import _generate_unsampled_indices
-from sklearn.ensemble import forest
+
+from distutils.version import LooseVersion
+if LooseVersion(sklearn.__version__) >= LooseVersion("0.24"):
+    # In sklearn version 0.24, forest module changed to be private.
+    from sklearn.ensemble._forest import _generate_unsampled_indices
+    from sklearn.ensemble import _forest as forest
+else:
+    # Before sklearn version 0.24, forest was public, supporting this.
+    from sklearn.ensemble.forest import _generate_unsampled_indices
+    from sklearn.ensemble import forest
+
 from sklearn.model_selection import cross_val_score
 from sklearn.base import clone
 from sklearn.metrics import r2_score
@@ -28,10 +37,10 @@ from copy import copy
 import warnings
 import tempfile
 from os import getpid, makedirs
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from distutils.version import LooseVersion
 
 GREY = '#444443'
+
+__version__='1.3.7'
 
 
 class PimpViz:
@@ -419,7 +428,12 @@ def _get_unsampled_indices(tree, n_samples):
     """
     An interface to get unsampled indices regardless of sklearn version.
     """
-    if LooseVersion(sklearn.__version__) >= LooseVersion("0.22"):
+    if LooseVersion(sklearn.__version__) >= LooseVersion("0.24"):
+        # Version 0.24 moved forest package name
+        from sklearn.ensemble._forest import _get_n_samples_bootstrap
+        n_samples_bootstrap = _get_n_samples_bootstrap(n_samples, n_samples)
+        return _generate_unsampled_indices(tree.random_state, n_samples, n_samples_bootstrap)
+    elif LooseVersion(sklearn.__version__) >= LooseVersion("0.22"):
         # Version 0.22 or newer uses 3 arguments.
         from sklearn.ensemble.forest import _get_n_samples_bootstrap
         n_samples_bootstrap = _get_n_samples_bootstrap(n_samples, n_samples)
@@ -873,9 +887,9 @@ def get_feature_corr(df, method="spearman"):
     return result
 
 
-def feature_corr_matrix(df):
+def feature_corr_matrix(df, method="spearman"):
     """
-    Return the Spearman's rank-order correlation between all pairs
+    Return the Spearman's rank-order correlation (or another method) between all pairs
     of features as a matrix with feature names as index and column names.
     The diagonal will be all 1.0 as features are self correlated.
 
@@ -885,11 +899,11 @@ def feature_corr_matrix(df):
     assume a linear relationship between the variables; it looks for
     monotonic relationships.
 
-    :param df_train: dataframe containing features as columns, and
-                     without the target variable.
+    :param df: dataframe containing features as columns, and without the target variable.
+    :param method: A string ("spearman", "pearson") or a callable function.
     :return: a data frame with the correlation matrix
     """
-    corr = np.round(get_feature_corr(df), 4)
+    corr = np.round(get_feature_corr(df, method=method), 4)
     df_corr = pd.DataFrame(data=corr, index=df.columns, columns=df.columns)
     return df_corr
 
@@ -901,7 +915,8 @@ def plot_corr_heatmap(df,
                       value_fontsize=8,
                       label_fontsize=9,
                       precision=2,
-                      xrot=80):
+                      xrot=80,
+                      method="spearman"):
     """
     Display the feature spearman's correlation matrix as a heatmap with
     any abs(value)>color_threshold appearing with background color.
@@ -919,7 +934,7 @@ def plot_corr_heatmap(df,
                       figsize=(7,5), label_fontsize=13, value_fontsize=11)
     viz.view() # or just viz in notebook
     """
-    corr = get_feature_corr(df)
+    corr = get_feature_corr(df, method=method)
     if len(corr.shape) == 0:
         corr = np.array([[1.0, corr],
                          [corr, 1.0]])
@@ -1007,12 +1022,13 @@ def rfmaxdepths(rf):
 
 
 def jeremy_trick_RF_sample_size(n):
-    # Jeremy's trick; hmm.. this won't work as a separate function?
-    # def batch_size_for_node_splitting(rs, n_samples):
-    #     forest.check_random_state(rs).randint(0, n_samples, 20000)
-    # forest._generate_sample_indices = batch_size_for_node_splitting
-    forest._generate_sample_indices = \
-        (lambda rs, n_samples: forest.check_random_state(rs).randint(0, n_samples, n))
+    if LooseVersion(sklearn.__version__) >= LooseVersion("0.24"):
+        forest._generate_sample_indices = \
+            (lambda rs, n_samples, _:
+             forest.check_random_state(rs).randint(0, n_samples, n))
+    else:
+        forest._generate_sample_indices = \
+            (lambda rs, n_samples: forest.check_random_state(rs).randint(0, n_samples, n))
 
 def jeremy_trick_reset_RF_sample_size():
     forest._generate_sample_indices = (lambda rs, n_samples:
